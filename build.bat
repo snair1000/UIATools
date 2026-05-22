@@ -12,13 +12,9 @@ if exist ".venv\Scripts\activate.bat" (
     call .venv\Scripts\activate.bat
 )
 
-REM Ensure PyInstaller is installed
-echo Checking PyInstaller installation...
-pip show pyinstaller >nul 2>&1
-if errorlevel 1 (
-    echo Installing PyInstaller...
-    pip install pyinstaller>=6.0.0
-)
+REM Install build dependencies (includes PyInstaller)
+echo Installing build dependencies...
+pip install -r requirements-dev.txt
 
 REM Clean previous builds
 echo Cleaning previous builds...

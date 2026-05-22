@@ -1,0 +1,8 @@
+# Development and build dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Include runtime dependencies
+-r requirements.txt
+
+# Build tools
+pyinstaller>=6.0.0,<7.0.0

@@ -39,8 +39,13 @@ When migrating from WinAppDriver (XPath-based) to RPA.Windows:
 
 The easiest way to use UIATools is with the pre-built executable:
 
-1. Download `UIATools.exe` from the `dist/` folder (or releases).
-2. Run `UIATools.exe` — no Python installation required!
+1. Download `UIATools.exe` from the [GitHub Releases](../../releases) page.
+2. **Verify the download** (optional but recommended):
+   ```powershell
+   # Compare SHA256 checksum with the value in the release notes
+   Get-FileHash UIATools.exe -Algorithm SHA256
+   ```
+3. Run `UIATools.exe` — no Python installation required!
 
 > **Note:** The executable is a portable, single-file application. You may need to allow it through Windows SmartScreen on first launch.
 
@@ -314,12 +319,11 @@ UIATools/
 │   └── utils/
 │       ├── mouse_hook.py        # Global mouse hook (click-to-inspect / record)
 │       └── win_helpers.py       # Windows API helpers
-├── dist/
-│   └── UIATools.exe             # Pre-built standalone executable
 ├── build.bat                    # Build script for creating the executable
 ├── UIATools.spec                # PyInstaller configuration
 ├── tests/
-├── requirements.txt
+├── requirements.txt             # Runtime dependencies
+├── requirements-dev.txt         # Build/dev dependencies (includes PyInstaller)
 └── README.md
 ```
 
@@ -332,7 +336,7 @@ UIATools/
 | `comtypes` | COM interface support |
 | `pywin32` | Windows API bindings |
 | `Pillow` | Image capture support |
-| `pyinstaller` | Building standalone executable (optional) |
+| `pyinstaller` | Building standalone executable (in `requirements-dev.txt`) |
 
 ## Building from Source
 
@@ -353,8 +357,8 @@ The executable will be created at `dist/UIATools.exe`.
 # Activate virtual environment
 .venv\Scripts\activate
 
-# Install PyInstaller if not already installed
-pip install pyinstaller>=6.0.0
+# Install build dependencies (includes PyInstaller)
+pip install -r requirements-dev.txt
 
 # Build using the spec file
 pyinstaller UIATools.spec --clean
@@ -368,6 +372,20 @@ pyinstaller UIATools.spec --clean
 | `build/` | Intermediate build files (can be deleted) |
 
 > **Tip:** The executable bundles all dependencies and runs without any external installations. It's ideal for distribution to team members who don't have Python set up.
+
+### Creating a Release
+
+When publishing a new release:
+
+1. Build the executable: `build.bat`
+2. Generate a checksum:
+   ```powershell
+   Get-FileHash dist\UIATools.exe -Algorithm SHA256 | Select-Object -ExpandProperty Hash
+   ```
+3. Create a GitHub Release and attach `UIATools.exe`
+4. Include the SHA256 checksum in the release notes for verification
+
+> **Note:** Do not commit `dist/UIATools.exe` to the repository. Binaries should be distributed via GitHub Releases for security and provenance.
 
 ## Troubleshooting
 
