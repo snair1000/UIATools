@@ -15,6 +15,13 @@ if exist ".venv\Scripts\activate.bat" (
 REM Install build dependencies (includes PyInstaller)
 echo Installing build dependencies...
 pip install -r requirements-dev.txt
+if errorlevel 1 (
+    echo ============================================
+    echo DEPENDENCY INSTALL FAILED!
+    echo ============================================
+    pause
+    exit /b 1
+)
 
 REM Clean previous builds
 echo Cleaning previous builds...
