@@ -33,9 +33,18 @@ When migrating from WinAppDriver (XPath-based) to RPA.Windows:
 
 ### Prerequisites
 - **Windows 10/11** (required — uses Windows UI Automation)
-- **Python 3.10+**
+- **Python 3.10+** (only if running from source)
 
-### Installation
+### Option A — Use the Standalone Executable (Recommended)
+
+The easiest way to use UIATools is with the pre-built executable:
+
+1. Download `UIATools.exe` from the `dist/` folder (or releases).
+2. Run `UIATools.exe` — no Python installation required!
+
+> **Note:** The executable is a portable, single-file application. You may need to allow it through Windows SmartScreen on first launch.
+
+### Option B — Run from Source
 
 ```bash
 # Clone or download the project
@@ -49,7 +58,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### Run the Inspector
+### Run the Inspector (from source)
 
 ```bash
 python -m src.main
@@ -305,6 +314,10 @@ UIATools/
 │   └── utils/
 │       ├── mouse_hook.py        # Global mouse hook (click-to-inspect / record)
 │       └── win_helpers.py       # Windows API helpers
+├── dist/
+│   └── UIATools.exe             # Pre-built standalone executable
+├── build.bat                    # Build script for creating the executable
+├── UIATools.spec                # PyInstaller configuration
 ├── tests/
 ├── requirements.txt
 └── README.md
@@ -319,6 +332,42 @@ UIATools/
 | `comtypes` | COM interface support |
 | `pywin32` | Windows API bindings |
 | `Pillow` | Image capture support |
+| `pyinstaller` | Building standalone executable (optional) |
+
+## Building from Source
+
+To build a standalone executable from source:
+
+### Quick Build (Windows)
+
+```bash
+# Run the build script
+build.bat
+```
+
+The executable will be created at `dist/UIATools.exe`.
+
+### Manual Build
+
+```bash
+# Activate virtual environment
+.venv\Scripts\activate
+
+# Install PyInstaller if not already installed
+pip install pyinstaller>=6.0.0
+
+# Build using the spec file
+pyinstaller UIATools.spec --clean
+```
+
+### Build Output
+
+| File | Description |
+|---|---|
+| `dist/UIATools.exe` | Standalone executable (no Python required) |
+| `build/` | Intermediate build files (can be deleted) |
+
+> **Tip:** The executable bundles all dependencies and runs without any external installations. It's ideal for distribution to team members who don't have Python set up.
 
 ## Troubleshooting
 
