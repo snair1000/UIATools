@@ -157,12 +157,13 @@ After recording, you can fine-tune steps in the Recorder tab:
 |---|---|
 | **Reorder steps** | Select a step, click **⬆** or **⬇** |
 | **Delete a step** | Select a step, click **❌ Delete** |
-| **Change action type** | Select a step, click **✏ Change Action** — choose from Click, Right Click, Double Click, Type Text, Set Value, Select, Get Element, Wait For Element |
-| **Set text input** | Select a step, click **📝 Set Text** — enter the text for Type Text / Set Value actions |
+| **Change action type** | Select a step, click **✏ Change Action** — choose from Click, Right Click, Double Click, Type Text, Set Value, Select, Get Element, Wait For Element, Send Keys |
+| **Set text input** | Select a step, click **📝 Set Text** — enter the text for Type Text / Set Value / Send Keys actions |
 | **Override locator** | Select a step, click **🔗 Override Locator** — pick from ranked strategies or enter a custom locator |
 | **Set wait timing** | Select a step, click **⏱ Set Wait** — configure wait-for-ready and wait-after-action timing |
 | **Add Type Text** | Select a step, click **➕ Add Type Text** — inserts a Type Text step after the selected one using the same element |
-| **Add Wait** | Select a step, click **➕ Add Wait** — inserts a Wait For Element step after the selected one |
+| **Add Wait** | Select a step, click **➕ Add Wait** — prompts for timeout (seconds), then inserts a Wait For Element step after the selected one |
+| **Add Send Keys** | Select a step, click **⌨ Add Send Keys** — inserts a Send Keys step to send keystrokes to the focused element (supports special keys like `{Enter}`, `{Tab}`, `{Ctrl}a`) |
 
 > **Tip:** Click any step in the list to highlight the corresponding element on screen and view its properties in the Inspector tab.
 
@@ -221,6 +222,9 @@ Once your steps are ready:
 
 #### Save directly to a file
 - Click **💾 Save .robot** instead — same options dialog, then choose a save location.
+
+#### Open an existing .robot file
+- Click **📂 Open .robot** — loads steps from an existing `.robot` file into the recorder for editing and playback.
 
 #### Copy keyword only
 - Click **📋 Copy Keyword** — copies just the keyword block (no Settings/Variables/Tasks) to clipboard.
@@ -301,6 +305,7 @@ UIATools/
 │   ├── export/
 │   │   ├── rf_exporter.py       # Robot Framework keyword/variable export
 │   │   ├── rf_code_generator.py # Full .robot file generator from recorded steps
+│   │   ├── rf_parser.py         # Parser for loading .robot files into recorder
 │   │   └── locator_strategy.py  # Ranked locator builder
 │   └── utils/
 │       ├── mouse_hook.py        # Global mouse hook (click-to-inspect / record)
