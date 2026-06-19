@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+dist/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller
+*.spec
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
