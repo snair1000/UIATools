@@ -1,31 +1,18 @@
-# Build outputs - distribute via GitHub Releases instead
-dist/
+# Build artifacts
 build/
-
-# Virtual environment
-.venv/
-venv/
-ENV/
+dist/
 
 # Python cache
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
 *.pyo
 
 # PyInstaller
-*.manifest
-*.spec.bak
+*.spec
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# OS
-Thumbs.db
-.DS_Store
 
 # Logs
 *.log

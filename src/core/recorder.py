@@ -52,6 +52,7 @@ class RecordedStep:
     enabled: bool = True  # Can be toggled off to skip during export
     wait_for_ready: bool = False  # Wait for element to be visible and clickable before action
     wait_after_action: float = 0.0  # Seconds to wait after action completes (for UI to settle)
+    wait_timeout: float = 10.0  # Timeout in seconds for Wait For Element action
 
     @property
     def locator(self) -> str:
@@ -87,7 +88,7 @@ class RecordedStep:
         elif self.action == ActionType.GET_ELEMENT:
             return f"${{element}}=    Get Element    {locator}"
         elif self.action == ActionType.WAIT_FOR_ELEMENT:
-            return f"Wait For Element    {locator}    timeout=10"
+            return f"Wait For Element    {locator}    timeout={self.wait_timeout}"
         elif self.action == ActionType.SEND_KEYS:
             # Send Keys doesn't need a locator - sends to focused element
             return f"Send Keys    keys={self.text_input}"
@@ -282,6 +283,15 @@ class Recorder:
                 step.wait_for_ready = wait_for_ready
             if wait_after_action is not None:
                 step.wait_after_action = wait_after_action
+
+    def set_steps(self, steps: list[RecordedStep]):
+        """
+        Replace all steps with the given list.
+        
+        Used when loading steps from a .robot file.
+        """
+        self._steps = list(steps)
+        self._renumber()
 
     def _renumber(self):
         """Re-assign step numbers sequentially."""

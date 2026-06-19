@@ -33,23 +33,9 @@ When migrating from WinAppDriver (XPath-based) to RPA.Windows:
 
 ### Prerequisites
 - **Windows 10/11** (required — uses Windows UI Automation)
-- **Python 3.10+** (only if running from source)
+- **Python 3.10+**
 
-### Option A — Use the Standalone Executable (Recommended)
-
-The easiest way to use UIATools is with the pre-built executable:
-
-1. Download `UIATools.exe` from the [GitHub Releases](../../releases) page.
-2. **Verify the download** (optional but recommended):
-   ```powershell
-   # Compare SHA256 checksum with the value in the release notes
-   Get-FileHash UIATools.exe -Algorithm SHA256
-   ```
-3. Run `UIATools.exe` — no Python installation required!
-
-> **Note:** The executable is a portable, single-file application. You may need to allow it through Windows SmartScreen on first launch.
-
-### Option B — Run from Source
+### Installation
 
 ```bash
 # Clone or download the project
@@ -63,7 +49,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### Run the Inspector (from source)
+### Run the Inspector
 
 ```bash
 python -m src.main
@@ -171,12 +157,13 @@ After recording, you can fine-tune steps in the Recorder tab:
 |---|---|
 | **Reorder steps** | Select a step, click **⬆** or **⬇** |
 | **Delete a step** | Select a step, click **❌ Delete** |
-| **Change action type** | Select a step, click **✏ Change Action** — choose from Click, Right Click, Double Click, Type Text, Set Value, Select, Get Element, Wait For Element |
-| **Set text input** | Select a step, click **📝 Set Text** — enter the text for Type Text / Set Value actions |
+| **Change action type** | Select a step, click **✏ Change Action** — choose from Click, Right Click, Double Click, Type Text, Set Value, Select, Get Element, Wait For Element, Send Keys |
+| **Set text input** | Select a step, click **📝 Set Text** — enter the text for Type Text / Set Value / Send Keys actions |
 | **Override locator** | Select a step, click **🔗 Override Locator** — pick from ranked strategies or enter a custom locator |
 | **Set wait timing** | Select a step, click **⏱ Set Wait** — configure wait-for-ready and wait-after-action timing |
 | **Add Type Text** | Select a step, click **➕ Add Type Text** — inserts a Type Text step after the selected one using the same element |
-| **Add Wait** | Select a step, click **➕ Add Wait** — inserts a Wait For Element step after the selected one |
+| **Add Wait** | Select a step, click **➕ Add Wait** — prompts for timeout (seconds), then inserts a Wait For Element step after the selected one |
+| **Add Send Keys** | Select a step, click **⌨ Add Send Keys** — inserts a Send Keys step to send keystrokes to the focused element (supports special keys like `{Enter}`, `{Tab}`, `{Ctrl}a`) |
 
 > **Tip:** Click any step in the list to highlight the corresponding element on screen and view its properties in the Inspector tab.
 
@@ -235,6 +222,9 @@ Once your steps are ready:
 
 #### Save directly to a file
 - Click **💾 Save .robot** instead — same options dialog, then choose a save location.
+
+#### Open an existing .robot file
+- Click **📂 Open .robot** — loads steps from an existing `.robot` file into the recorder for editing and playback.
 
 #### Copy keyword only
 - Click **📋 Copy Keyword** — copies just the keyword block (no Settings/Variables/Tasks) to clipboard.
@@ -315,15 +305,13 @@ UIATools/
 │   ├── export/
 │   │   ├── rf_exporter.py       # Robot Framework keyword/variable export
 │   │   ├── rf_code_generator.py # Full .robot file generator from recorded steps
+│   │   ├── rf_parser.py         # Parser for loading .robot files into recorder
 │   │   └── locator_strategy.py  # Ranked locator builder
 │   └── utils/
 │       ├── mouse_hook.py        # Global mouse hook (click-to-inspect / record)
 │       └── win_helpers.py       # Windows API helpers
-├── build.bat                    # Build script for creating the executable
-├── UIATools.spec                # PyInstaller configuration
 ├── tests/
-├── requirements.txt             # Runtime dependencies
-├── requirements-dev.txt         # Build/dev dependencies (includes PyInstaller)
+├── requirements.txt
 └── README.md
 ```
 
@@ -336,56 +324,6 @@ UIATools/
 | `comtypes` | COM interface support |
 | `pywin32` | Windows API bindings |
 | `Pillow` | Image capture support |
-| `pyinstaller` | Building standalone executable (in `requirements-dev.txt`) |
-
-## Building from Source
-
-To build a standalone executable from source:
-
-### Quick Build (Windows)
-
-```bash
-# Run the build script
-build.bat
-```
-
-The executable will be created at `dist/UIATools.exe`.
-
-### Manual Build
-
-```bash
-# Activate virtual environment
-.venv\Scripts\activate
-
-# Install build dependencies (includes PyInstaller)
-pip install -r requirements-dev.txt
-
-# Build using the spec file
-pyinstaller UIATools.spec --clean
-```
-
-### Build Output
-
-| File | Description |
-|---|---|
-| `dist/UIATools.exe` | Standalone executable (no Python required) |
-| `build/` | Intermediate build files (can be deleted) |
-
-> **Tip:** The executable bundles all dependencies and runs without any external installations. It's ideal for distribution to team members who don't have Python set up.
-
-### Creating a Release
-
-When publishing a new release:
-
-1. Build the executable: `build.bat`
-2. Generate a checksum:
-   ```powershell
-   Get-FileHash dist\UIATools.exe -Algorithm SHA256 | Select-Object -ExpandProperty Hash
-   ```
-3. Create a GitHub Release and attach `UIATools.exe`
-4. Include the SHA256 checksum in the release notes for verification
-
-> **Note:** Do not commit `dist/UIATools.exe` to the repository. Binaries should be distributed via GitHub Releases for security and provenance.
 
 ## Troubleshooting
 

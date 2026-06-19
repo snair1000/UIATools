@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from src.core.recorder import ActionType, RecordedStep, Recorder
 from src.core.step_executor import StepExecutor, ExecutionStatus, StepResult
 from src.export.rf_code_generator import generate_robot_file, generate_keyword_only
+from src.export.rf_parser import parse_robot_file
 
 
 class RecorderPanel(ttk.Frame):
@@ -75,7 +76,10 @@ class RecorderPanel(ttk.Frame):
         ttk.Button(ctrl_frame, text="💾 Save .robot", command=self._save_robot_file).pack(
             side=tk.LEFT, padx=2
         )
-        ttk.Button(ctrl_frame, text="📋 Copy Keyword", command=self._copy_keyword).pack(
+        ttk.Button(ctrl_frame, text="� Open .robot", command=self._open_robot_file).pack(
+            side=tk.LEFT, padx=2
+        )
+        ttk.Button(ctrl_frame, text="�📋 Copy Keyword", command=self._copy_keyword).pack(
             side=tk.LEFT, padx=2
         )
 
@@ -555,6 +559,23 @@ class RecorderPanel(ttk.Frame):
             messagebox.showinfo("No Selection", "Select a step to wait for.")
             return
 
+        # Prompt for wait timeout
+        timeout_str = simpledialog.askstring(
+            "Wait Timeout",
+            "Enter the wait timeout in seconds:",
+            initialvalue="10",
+            parent=self,
+        )
+        if timeout_str is None:
+            return
+        
+        try:
+            timeout = float(timeout_str)
+            if timeout <= 0:
+                timeout = 10.0
+        except ValueError:
+            timeout = 10.0
+
         source_step = self._recorder.steps[idx]
         new_step = RecordedStep(
             step_number=0,
@@ -562,6 +583,7 @@ class RecorderPanel(ttk.Frame):
             element_info=source_step.element_info,
             screen_x=source_step.screen_x,
             screen_y=source_step.screen_y,
+            wait_timeout=timeout,
         )
         self._recorder.insert_step_after(idx, new_step)
         self._refresh_step_list()
@@ -763,6 +785,77 @@ class RecorderPanel(ttk.Frame):
             f.write(code)
 
         messagebox.showinfo("Saved", f"Robot file saved to:\n{path}")
+
+    def _open_robot_file(self):
+        """Open and load a previously saved .robot file."""
+        path = filedialog.askopenfilename(
+            title="Open Robot Framework File",
+            filetypes=[
+                ("Robot Framework", "*.robot"),
+                ("Resource Files", "*.resource"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+
+        # Check if there are existing steps
+        if self._recorder.step_count > 0:
+            result = messagebox.askyesnocancel(
+                "Existing Steps",
+                "There are existing recorded steps.\n\n"
+                "Yes = Replace with loaded steps\n"
+                "No = Append loaded steps\n"
+                "Cancel = Abort",
+            )
+            if result is None:  # Cancel
+                return
+            append_mode = not result  # No = append
+        else:
+            append_mode = False
+
+        # Parse the file
+        parse_result = parse_robot_file(path)
+
+        if parse_result.errors:
+            messagebox.showerror(
+                "Parse Errors",
+                "Errors while parsing file:\n\n" + "\n".join(parse_result.errors),
+            )
+            return
+
+        if not parse_result.steps:
+            messagebox.showwarning(
+                "No Steps Found",
+                "No executable steps were found in the file.\n\n"
+                "Make sure the file contains action keywords like:\n"
+                "Click, Type Text, Double Click, etc.",
+            )
+            return
+
+        # Load the steps
+        if append_mode:
+            # Append to existing steps
+            existing_steps = self._recorder.steps
+            all_steps = existing_steps + parse_result.steps
+            self._recorder.set_steps(all_steps)
+        else:
+            # Replace existing steps
+            self._recorder.set_steps(parse_result.steps)
+
+        self._refresh_step_list()
+
+        # Show summary
+        msg = f"Loaded {len(parse_result.steps)} steps from:\n{path}"
+        if parse_result.task_name:
+            msg += f"\n\nTask: {parse_result.task_name}"
+        if parse_result.variables:
+            msg += f"\n\nVariables resolved: {len(parse_result.variables)}"
+        if parse_result.warnings:
+            msg += f"\n\nWarnings:\n" + "\n".join(parse_result.warnings[:5])
+
+        messagebox.showinfo("Loaded", msg)
+        self._status_var.set(f"Loaded {len(parse_result.steps)} steps")
 
     def _copy_keyword(self):
         """Copy just the keyword block to clipboard."""

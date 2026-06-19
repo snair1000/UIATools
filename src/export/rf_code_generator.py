@@ -218,7 +218,12 @@ def _append_steps(
             safe_name = _safe_var_suffix(step)
             lines.append(f"    ${{elem_{safe_name}}}=    Get Element    {locator_ref}")
         elif action == ActionType.WAIT_FOR_ELEMENT:
-            lines.append(f"    Wait For Element    {locator_ref}    timeout=10")
+            timeout = step.wait_timeout if step.wait_timeout > 0 else 10
+            lines.append(f"    Wait For Element    {locator_ref}    timeout={timeout}")
+        elif action == ActionType.SEND_KEYS:
+            # Send Keys sends keystrokes to the currently focused element
+            keys = step.text_input or "ENTER_KEYS_HERE"
+            lines.append(f"    Send Keys    keys={keys}")
         else:
             lines.append(f"    # Unknown action: {action.value} on {locator_ref}")
 
