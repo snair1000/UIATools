@@ -1,0 +1,8 @@
+uiautomation>=2.0.18
+pywinauto>=0.6.8
+comtypes>=1.4.1
+pywin32>=306
+Pillow>=10.0.0
+
+# Build
+pyinstaller>=6.0.0
