@@ -11,6 +11,8 @@ the 3rd child of Desktop would start with path:1|3.
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Callable
@@ -23,6 +25,58 @@ from src.core.uia_wrapper import (
     get_children,
     get_root_element,
 )
+
+# Chromium/WebView2 builds its UIA accessibility tree LAZILY - only after a
+# UIA client first touches it (WM_GETOBJECT). If a tree walk happens before
+# that, the web content is invisible: the walk stops at the
+# 'Chrome Legacy Window' / Chrome_RenderWidgetHostHWND host pane with no
+# children. These helpers force activation before walking.
+
+_WM_GETOBJECT = 0x003D
+_OBJID_CLIENT = 0xFFFFFFFC  # -4 as DWORD
+_WEBVIEW_HOST_CLASSES = ("Chrome_RenderWidgetHostHWND", "Chrome_WidgetWin")
+
+
+def _activate_webview_accessibility(hwnd: int, settle_s: float = 0.3):
+    """
+    Send WM_GETOBJECT(OBJID_CLIENT) to every Chromium render-widget child
+    window of hwnd so the browser builds its UIA tree for web content.
+    No-op for windows without embedded Chromium/WebView2.
+    """
+    user32 = ctypes.windll.user32
+    targets: list[int] = []
+
+    @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    def _enum_proc(child_hwnd, _lparam):
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(child_hwnd, buf, 256)
+        if any(buf.value.startswith(c) for c in _WEBVIEW_HOST_CLASSES):
+            targets.append(child_hwnd)
+        return True
+
+    try:
+        user32.EnumChildWindows(hwnd, _enum_proc, 0)
+        for t in targets:
+            result = ctypes.wintypes.DWORD()
+            user32.SendMessageTimeoutW(
+                t, _WM_GETOBJECT, 0, _OBJID_CLIENT,
+                0x0002,  # SMTO_ABORTIFHUNG
+                1000, ctypes.byref(result),
+            )
+        if targets:
+            time.sleep(settle_s)  # give the renderer time to build the tree
+    except Exception:
+        pass
+
+
+def _is_webview_host_node(info: ElementInfo) -> bool:
+    cls = info.class_name or ""
+    return (
+        cls == "Chrome_RenderWidgetHostHWND"
+        or cls.startswith("Chrome_WidgetWin")
+        or "WebView2" in cls
+        or info.name == "Chrome Legacy Window"
+    )
 
 
 @dataclass
@@ -108,6 +162,20 @@ def _walk_recursive(
         return
 
     children = get_children(parent_node.control)
+
+    # WebView2/Chromium host with no children yet: the accessibility tree
+    # may still be building - poke it and retry briefly.
+    if not children and _is_webview_host_node(parent_node.element_info):
+        hwnd = parent_node.element_info.native_window_handle
+        for attempt in range(3):
+            if hwnd:
+                _activate_webview_accessibility(hwnd, settle_s=0.3 * (attempt + 1))
+            else:
+                time.sleep(0.3 * (attempt + 1))
+            children = get_children(parent_node.control)
+            if children:
+                break
+
     for i, child_ctrl in enumerate(children, start=1):
         child_indices = parent_indices + [i]
         child_path = build_path(child_indices)
@@ -137,6 +205,15 @@ def walk_from_window(
     Walk the tree starting from a specific window.
     Determines the window's 1-based index among Desktop children first.
     """
+    # Wake up any embedded Chromium/WebView2 content BEFORE walking, so web
+    # elements (buttons, checkboxes...) are present in the captured tree.
+    try:
+        hwnd = window_control.NativeWindowHandle
+        if hwnd:
+            _activate_webview_accessibility(hwnd)
+    except Exception:
+        pass
+
     root = get_root_element()
     desktop_children = get_children(root)
     window_index = 1

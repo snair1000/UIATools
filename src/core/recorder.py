@@ -53,6 +53,8 @@ class RecordedStep:
     wait_for_ready: bool = False  # Wait for element to be visible and clickable before action
     wait_after_action: float = 0.0  # Seconds to wait after action completes (for UI to settle)
     wait_timeout: float = 10.0  # Timeout in seconds for Wait For Element action
+    window_locator: str = ""  # Window the element lives in (emitted as Control Window)
+    anchor_locators: list[str] = field(default_factory=list)  # Set Anchor chain (e.g. WebView2 host, inner panel)
 
     @property
     def locator(self) -> str:

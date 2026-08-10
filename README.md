@@ -28,6 +28,10 @@ When migrating from WinAppDriver (XPath-based) to RPA.Windows:
 | **Recorder** | Record click sequences and generate complete `.robot` files with reusable keywords |
 | **Playback** | Run recorded steps directly to test/verify automation flows before export |
 | **Compact Mode** | Smaller window showing only key locators + recorder for side-by-side work |
+| **Screen Repository** | Capture full UIA tree snapshots of application screens into a SQLite database for offline lookup |
+| **Coord Recorder** | Lightweight recorder: captures raw clicks + keystrokes with window context, no UIA resolution at click time |
+| **AI Script Generation** | Resolves recorded coordinates against the repository, uses an LLM to pick locators/intent, and generates a `.robot` file |
+| **Review + Test Run** | Review AI-generated steps, run them live against the target app, fix failures, and re-run from the failed step |
 
 ## Quick Start
 
@@ -72,7 +76,7 @@ python -m src.main
 You will see the main window with:
 - A **toolbar** across the top (Select Window, Refresh, Inspect, Record, Compact, path lookup, depth control)
 - A **tree panel** on the left (empty until you select a window)
-- A **tabbed panel** on the right with two tabs: **🔍 Inspector** and **⏺ Recorder**
+- A **tabbed panel** on the right with four tabs: **🔍 Inspector**, **⏺ Recorder**, **📁 Repository**, and **⌖ Coord Recorder**
 - A **status bar** at the bottom
 
 ### Step 2 — Select a target application
@@ -254,6 +258,58 @@ When inspecting elements you often need to see the target application alongside 
 
 ---
 
+## AI-Assisted Script Generation Workflow
+
+An alternative to the classic Ctrl+click Recorder: record **raw clicks and keystrokes** at full speed, then let the tool resolve them into locators offline using a pre-captured screen repository and an LLM.
+
+### Step A — Configure the AI provider
+
+1. Open **AI → AI Settings...**
+2. Enter a LiteLLM-style model string, e.g.:
+   - `ollama/qwen2.5-coder:14b` — local/remote Ollama (no API key)
+   - `anthropic/claude-sonnet-4-5` — Anthropic API
+   - `openai/gpt-4o` — OpenAI API
+3. Provide the API key / base URL if the provider needs one.
+
+> AI features require `litellm` (`pip install litellm`). Without it, the rest of the tool works normally.
+
+### Step B — Build the screen repository
+
+1. **File → New Repository...** (or **Open Repository...**) to create/open the SQLite repository (`.db`).
+2. Navigate the target application to a screen you will automate, **with the page fully loaded**.
+3. In the **📁 Repository** tab, click **📸 Capture Window...**, pick the window, give the screen a label.
+4. Repeat for every screen your flow passes through.
+
+> **WebView2 / embedded Chromium screens:** the capture automatically activates the browser's accessibility tree (Chromium builds it lazily). If a previously captured screen only contains a "Chrome Legacy Window" pane and no web elements, **re-capture it** — script generation will flag such screens with *"web content missing from the snapshot"*.
+
+### Step C — Record the interaction
+
+1. Go to the **⌖ Coord Recorder** tab, click **⏺ Start Capture**.
+2. Perform the flow in the target application at normal speed — every click and keystroke is captured with its window context (clicks are attributed to the window **under the cursor**). Clicks on UIATools itself are ignored.
+3. **Ctrl+Shift+F12** toggles pause (e.g. while typing a password). Right-click an event to **delete** or **redact** it — redacted text is never sent to the LLM.
+4. Click events show the absolute coordinates, window-relative coordinates, and the window rect at click time.
+5. **💾 Save Recording** / **📂 Load Recording** persist recordings in the repository.
+
+### Step D — Generate, review, test, and fix
+
+1. Click **🤖 Generate Script with AI...**
+2. For each recorded click the pipeline: matches the window to a stored screen → converts the click to window-relative coordinates (scaling for window-size differences) → finds the stored elements at that point (interactive controls ranked first by distance to the click) → computes ranked locator strategies → asks the LLM to pick the element/locator and infer intent (Click vs Set Value vs dropdown Select).
+3. In the review dialog you can:
+   - Inspect each step's locator, confidence, and the AI's reasoning
+   - Swap the locator from the candidate's other strategies (double-click a row)
+   - **🧠 Ask AI to Reconsider** with free-text feedback
+   - **▶ Test Run** — executes the steps live against the target application (bring it to the flow's starting screen first; 3-second countdown). Each row turns green (OK) or red (FAILED). Execution stops at the first failure and selects the failing row — fix the locator, then **▶ Run from Selected** to resume without redoing earlier steps.
+4. **💾 Save .robot** / **📋 Copy to Clipboard** — accepted locator choices are remembered and preferred in future generations.
+
+Generated scripts follow these conventions:
+- `Control Window` is emitted whenever the flow moves to a different window
+- WebView2-hosted elements get a `Set Anchor` chain (host panel → inner panel)
+- Typed values are emitted as `Send Keys` with `${VALUE_*}` variables
+- Dropdown-like controls become `Click` + `Send Keys`
+- Pauses ≥ 0.5 s observed while recording become `Sleep` statements
+
+---
+
 ## Locator Strategy Priority
 
 The tool recommends locators in this order:
@@ -289,9 +345,13 @@ The tool recommends locators in this order:
 UIATools/
 ├── src/
 │   ├── main.py                  # Entry point
+│   ├── ai/
+│   │   ├── llm_client.py        # LiteLLM wrapper (Ollama / Anthropic / OpenAI)
+│   │   ├── prompts.py           # LLM prompt templates + response parsing
+│   │   └── script_builder.py    # Coordinate → element → locator → .robot pipeline
 │   ├── core/
 │   │   ├── uia_wrapper.py       # Low-level UIA COM wrapper + ElementInfo dataclass
-│   │   ├── tree_walker.py       # Walks UIA tree, builds paths
+│   │   ├── tree_walker.py       # Walks UIA tree, builds paths, WebView2 accessibility activation
 │   │   ├── element_inspector.py # Deep element property inspection
 │   │   ├── coord_mapper.py      # Maps (x,y) ↔ elements ↔ paths
 │   │   ├── recorder.py          # Records click sequences as steps
@@ -301,13 +361,24 @@ UIATools/
 │   │   ├── tree_panel.py        # Tree view with search/filter
 │   │   ├── property_panel.py    # Property display + compact mode support
 │   │   ├── recorder_panel.py    # Recorder controls, step list, editing, playback
+│   │   ├── repository_panel.py  # Screen repository management (capture/browse)
+│   │   ├── coord_recorder_panel.py    # Raw coordinate/keystroke recorder UI
+│   │   ├── generation_review_dialog.py # AI generation review + live test run
+│   │   ├── ai_settings_dialog.py       # LLM provider configuration
 │   │   └── highlight.py         # Red overlay rectangle
+│   ├── recording/
+│   │   ├── coord_recorder.py    # Raw click/keystroke capture with window context
+│   │   └── keyboard_hook.py     # Global keyboard hook
+│   ├── repository/
+│   │   ├── schema.py            # SQLite schema
+│   │   └── screen_db.py         # Screen/element/recording storage + coordinate lookup
 │   ├── export/
 │   │   ├── rf_exporter.py       # Robot Framework keyword/variable export
 │   │   ├── rf_code_generator.py # Full .robot file generator from recorded steps
 │   │   ├── rf_parser.py         # Parser for loading .robot files into recorder
 │   │   └── locator_strategy.py  # Ranked locator builder
 │   └── utils/
+│       ├── app_config.py        # Persistent app settings (%APPDATA%\UIATools)
 │       ├── mouse_hook.py        # Global mouse hook (click-to-inspect / record)
 │       └── win_helpers.py       # Windows API helpers
 ├── tests/
@@ -324,6 +395,8 @@ UIATools/
 | `comtypes` | COM interface support |
 | `pywin32` | Windows API bindings |
 | `Pillow` | Image capture support |
+| `litellm` *(optional)* | LLM access for AI script generation (Ollama / Anthropic / OpenAI) |
+| `psutil` *(optional)* | Faster process-name resolution for recorded events |
 
 ## Troubleshooting
 
@@ -332,6 +405,16 @@ UIATools/
 - Check DPI scaling — the tool sets DPI awareness at startup, but multi-monitor setups with mixed scaling can cause offsets
 - Some embedded web content (WebView2) may not expose UIA elements at all depths
 - Run the tool as **Administrator** if the target app is elevated
+
+### AI generation picks the wrong element / "Chrome Legacy Window"
+- The screen snapshot in the repository is likely stale or was captured **before the WebView2 page finished loading** — Chromium exposes its UIA tree lazily, so early captures contain only the host pane
+- **Re-capture the screen** in the Repository tab with the page fully loaded; the capture now activates the browser's accessibility tree automatically
+- If the UI scrolled or rows expanded between recording and capture, coordinates map to a different element — re-capture with the screen in the same state as during recording
+
+### Test Run fails on a step that works manually
+- Make sure the target application is on the **same screen** the recording started from before pressing Test Run
+- Check the window title — `Control Window` uses the recorded title; dynamic titles (patient names, counters) may need a wildcard-friendly locator
+- Fix the locator on the failing (red) row, then use **Run from Selected** to resume
 
 ### Tree is slow to load
 - Reduce **Max Depth** in the toolbar (default: 8) before loading

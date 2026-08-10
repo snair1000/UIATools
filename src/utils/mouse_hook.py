@@ -88,13 +88,17 @@ class MouseHook:
         hook.stop()
     """
 
-    def __init__(self, callback: Callable[[int, int, str], None]):
+    def __init__(self, callback: Callable[[int, int, str], None], require_ctrl: bool = True):
         """
         Args:
             callback: Called with (x, y, button_name) when a mouse click is detected.
                       button_name is "left" or "right".
+            require_ctrl: If True (default), only clicks with Ctrl held are
+                          reported (click-to-inspect mode). If False, every
+                          click is reported (coordinate recorder mode).
         """
         self._callback = callback
+        self._require_ctrl = require_ctrl
         self._hook_handle: Optional[int] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -144,16 +148,20 @@ class MouseHook:
                 x = ms.pt.x
                 y = ms.pt.y
 
-                # Only inspect when Ctrl key is held down (0x11 = VK_CONTROL)
-                ctrl_state = _user32.GetAsyncKeyState(0x11)
-                ctrl_pressed = (ctrl_state & 0x8000) != 0
+                # Only inspect when Ctrl key is held down (0x11 = VK_CONTROL),
+                # unless require_ctrl is disabled (recorder mode).
+                if self._require_ctrl:
+                    ctrl_state = _user32.GetAsyncKeyState(0x11)
+                    ctrl_ok = (ctrl_state & 0x8000) != 0
+                else:
+                    ctrl_ok = True
 
-                if wParam == WM_LBUTTONDOWN and ctrl_pressed:
+                if wParam == WM_LBUTTONDOWN and ctrl_ok:
                     try:
                         self._callback(x, y, "left")
                     except Exception:
                         pass
-                elif wParam == WM_RBUTTONDOWN and ctrl_pressed:
+                elif wParam == WM_RBUTTONDOWN and ctrl_ok:
                     try:
                         self._callback(x, y, "right")
                     except Exception:

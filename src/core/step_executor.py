@@ -10,6 +10,8 @@ Provides the ability to replay recorded steps by:
 
 from __future__ import annotations
 
+import os
+import re
 import time
 import threading
 from dataclasses import dataclass, field
@@ -90,13 +92,89 @@ class StepExecutor:
         
         # Target window for scoped searches (optional)
         self._target_window: Optional[auto.Control] = None
+        self._target_window_handle: int = 0
+        self._target_window_locator: str = ""
+
+        # Our own process id - playback must never interact with UIATools itself
+        self._own_pid: int = os.getpid()
 
     def set_target_window(self, window: Optional[auto.Control]):
         """Set a target window to scope element searches (improves performance and accuracy)."""
         self._target_window = window
+        self._target_window_handle = 0
+        if window is not None:
+            self._target_window_locator = ""
+            try:
+                self._target_window_handle = window.NativeWindowHandle or 0
+            except Exception:
+                self._target_window_handle = 0
+
+    def set_target_window_locator(self, locator: str):
+        """
+        Set a window locator string (e.g. 'name:My App' from a loaded .robot
+        file's Control Window call). Resolved lazily on the execution thread.
+        Clears any previously selected target window - the loaded script
+        declares its own target.
+        """
+        self._target_window_locator = (locator or "").strip()
+        if self._target_window_locator:
+            self._target_window = None
+            self._target_window_handle = 0
+
+    def _not_own_process(self, control: auto.Control, depth: int) -> bool:
+        """Compare filter: reject elements belonging to UIATools' own process."""
+        try:
+            return control.ProcessId != self._own_pid
+        except Exception:
+            return True
+
+    def _is_own_element(self, element: Optional[auto.Control]) -> bool:
+        """Return True if the element belongs to UIATools' own process."""
+        if element is None:
+            return False
+        try:
+            return element.ProcessId == self._own_pid
+        except Exception:
+            return False
+
+    def _resolve_window_locator(self, locator: str) -> Optional[auto.Control]:
+        """Resolve a window locator string (name:/id:/class: parts) to a top-level window."""
+        criteria = {}
+        for part in re.split(r"\s+and\s+", locator, flags=re.IGNORECASE):
+            p = part.strip()
+            pl = p.lower()
+            if pl.startswith("name:"):
+                criteria["Name"] = p[5:].strip().strip('"')
+            elif pl.startswith("subname:"):
+                criteria["SubName"] = p[8:].strip().strip('"')
+            elif pl.startswith("id:"):
+                criteria["AutomationId"] = p[3:].strip().strip('"')
+            elif pl.startswith("class:"):
+                criteria["ClassName"] = p[6:].strip().strip('"')
+        if not criteria:
+            return None
+        try:
+            win = auto.GetRootControl().Control(
+                searchDepth=2, Compare=self._not_own_process, **criteria
+            )
+            if win.Exists(maxSearchSeconds=self.search_timeout):
+                return win
+        except Exception as e:
+            self._update_status(f"Window locator '{locator}' not resolved: {e}")
+        return None
 
     def get_search_root(self) -> auto.Control:
         """Get the root element for searches (target window if set, else Desktop)."""
+        # Prefer re-resolving by native handle on the *current* thread
+        # (UIA COM objects should not be shared across threads).
+        if self._target_window_handle:
+            try:
+                ctrl = auto.ControlFromHandle(self._target_window_handle)
+                if ctrl is not None:
+                    _ = ctrl.Name  # verify still valid
+                    return ctrl
+            except Exception:
+                self._target_window_handle = 0
         if self._target_window is not None:
             try:
                 # Verify window is still valid
@@ -104,6 +182,11 @@ class StepExecutor:
                 return self._target_window
             except Exception:
                 self._target_window = None
+        # Window locator from a loaded .robot file (Control Window ...)
+        if self._target_window_locator:
+            win = self._resolve_window_locator(self._target_window_locator)
+            if win is not None:
+                return win
         return auto.GetRootControl()
 
     @property
@@ -178,13 +261,24 @@ class StepExecutor:
 
     def _execute_steps_internal(self, steps: list[RecordedStep], start_from: int):
         """Internal method to execute steps (runs on worker thread)."""
-        # Initialize COM for this thread
+        # Initialize COM/UIA properly for this thread (comtypes-aware)
+        com_inited = False
         try:
-            import ctypes
-            ctypes.windll.ole32.CoInitialize(0)
+            auto.InitializeUIAutomationInCurrentThread()
+            com_inited = True
         except Exception:
             pass
 
+        try:
+            self._run_steps_loop(steps, start_from)
+        finally:
+            if com_inited:
+                try:
+                    auto.UninitializeUIAutomationInCurrentThread()
+                except Exception:
+                    pass
+
+    def _run_steps_loop(self, steps: list[RecordedStep], start_from: int):
         with self._lock:
             self._state.is_running = True
             self._state.is_paused = False
@@ -276,10 +370,15 @@ class StepExecutor:
         start_time = time.time()
 
         try:
-            # SEND_KEYS doesn't need to find an element - it sends to focused element
+            # SEND_KEYS: if a locator is present, keys go to that element;
+            # otherwise they are sent to the currently focused element.
             if step.action == ActionType.SEND_KEYS:
+                locator = step.locator
                 element = None
-                locator = "(focused element)"
+                if locator.strip() and locator != "(focused element)":
+                    element = self._find_element(locator, step.element_info)
+                if element is None:
+                    locator = "(focused element)"
             else:
                 # Find the element using the locator
                 locator = step.locator
@@ -290,7 +389,10 @@ class StepExecutor:
                     self._update_status(f"Locator failed, trying coordinates ({step.screen_x}, {step.screen_y})...")
                     try:
                         element = auto.ControlFromPoint(step.screen_x, step.screen_y)
-                        if element:
+                        if self._is_own_element(element):
+                            self._update_status("Element at coordinates belongs to UIATools itself - skipping.")
+                            element = None
+                        elif element:
                             self._update_status(f"Found element at coordinates: {element.Name or element.ControlTypeName}")
                     except Exception:
                         pass
@@ -358,8 +460,8 @@ class StepExecutor:
                     )
 
             elif step.action == ActionType.SEND_KEYS:
-                # Send keys to currently focused element (no locator needed)
-                self._perform_send_keys(step.text_input)
+                # Send keys to the located element (if any) or focused element
+                self._perform_send_keys(step.text_input, element)
                 message = f"Sent keys: {step.text_input[:30]}{'...' if len(step.text_input) > 30 else ''}"
 
             else:
@@ -477,13 +579,23 @@ class StepExecutor:
                 return None
             current = children[idx - 1]  # Convert to 0-based
 
+        # Never act on UIATools' own UI (paths are z-order dependent and can
+        # accidentally resolve to this tool's window, closing/breaking it).
+        if self._is_own_element(current):
+            self._update_status("Path resolved to UIATools itself - ignoring.")
+            return None
+
         return current
 
     def _find_by_automation_id(self, automation_id: str) -> Optional[auto.Control]:
         """Find element by AutomationId."""
         try:
             root = self.get_search_root()
-            element = root.Control(searchDepth=self.search_depth, AutomationId=automation_id)
+            element = root.Control(
+                searchDepth=self.search_depth,
+                AutomationId=automation_id,
+                Compare=self._not_own_process,
+            )
             if element.Exists(maxSearchSeconds=self.search_timeout):
                 return element
         except Exception as e:
@@ -494,7 +606,11 @@ class StepExecutor:
         """Find element by Name."""
         try:
             root = self.get_search_root()
-            element = root.Control(searchDepth=self.search_depth, Name=name)
+            element = root.Control(
+                searchDepth=self.search_depth,
+                Name=name,
+                Compare=self._not_own_process,
+            )
             if element.Exists(maxSearchSeconds=self.search_timeout):
                 return element
         except Exception as e:
@@ -505,7 +621,11 @@ class StepExecutor:
         """Find element by ClassName."""
         try:
             root = self.get_search_root()
-            element = root.Control(searchDepth=self.search_depth, ClassName=class_name)
+            element = root.Control(
+                searchDepth=self.search_depth,
+                ClassName=class_name,
+                Compare=self._not_own_process,
+            )
             if element.Exists(maxSearchSeconds=self.search_timeout):
                 return element
         except Exception as e:
@@ -546,7 +666,9 @@ class StepExecutor:
             }
             ctrl_class = type_map.get(control_type)
             if ctrl_class:
-                element = ctrl_class(searchDepth=self.search_depth)
+                element = ctrl_class(
+                    searchDepth=self.search_depth, Compare=self._not_own_process
+                )
                 if element.Exists(maxSearchSeconds=self.search_timeout):
                     return element
         except Exception as e:
@@ -580,7 +702,11 @@ class StepExecutor:
         try:
             root = self.get_search_root()
             self._update_status(f"Searching with criteria: {criteria}")
-            element = root.Control(searchDepth=self.search_depth, **criteria)
+            element = root.Control(
+                searchDepth=self.search_depth,
+                Compare=self._not_own_process,
+                **criteria,
+            )
             if element.Exists(maxSearchSeconds=self.search_timeout):
                 return element
             self._update_status(f"Element not found with criteria: {criteria}")
@@ -778,15 +904,9 @@ class StepExecutor:
         except Exception as e:
             raise RuntimeError(f"Failed to type text: {e}")
 
-    def _perform_send_keys(self, keys: str):
+    def _perform_send_keys(self, keys: str, element: Optional[auto.Control] = None):
         """
-        Send keystrokes to the currently focused element.
-        
-        This does not require finding an element first - it sends keys
-        directly to whatever has focus. Useful for:
-        - Typing into a field after clicking it
-        - Sending keyboard shortcuts (e.g., {Ctrl}s, {Enter}, {Tab})
-        - Typing text into dialogs or popups
+        Send keystrokes to an element (focused first) or to whatever has focus.
         
         Special keys format:
         - {Enter}, {Tab}, {Escape}, {Backspace}, {Delete}
@@ -796,6 +916,12 @@ class StepExecutor:
         - {Up}, {Down}, {Left}, {Right} - arrow keys
         """
         try:
+            if element is not None:
+                try:
+                    element.SetFocus()
+                    time.sleep(0.1)
+                except Exception:
+                    pass
             auto.SendKeys(keys, interval=0.02)
         except Exception as e:
             raise RuntimeError(f"Failed to send keys: {e}")

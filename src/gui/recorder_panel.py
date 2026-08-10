@@ -59,11 +59,6 @@ class RecorderPanel(ttk.Frame):
         ctrl_frame = ttk.Frame(self)
         ctrl_frame.pack(fill=tk.X, padx=4, pady=4)
 
-        self._record_btn = ttk.Button(
-            ctrl_frame, text="⏺ Start Recording", command=self._toggle_recording
-        )
-        self._record_btn.pack(side=tk.LEFT, padx=2)
-
         ttk.Button(ctrl_frame, text="🗑 Clear", command=self._clear_steps).pack(
             side=tk.LEFT, padx=2
         )
@@ -239,12 +234,10 @@ class RecorderPanel(ttk.Frame):
         """Start or stop recording."""
         if self._recorder.is_recording:
             self._recorder.stop()
-            self._record_btn.config(text="⏺ Start Recording")
             self._status_var.set(f"Stopped ({self._recorder.step_count} steps)")
             self._status_label.config(foreground="gray")
         else:
             self._recorder.start()
-            self._record_btn.config(text="⏹ Stop Recording")
             self._status_var.set("🔴 RECORDING...")
             self._status_label.config(foreground="red")
 
@@ -843,12 +836,19 @@ class RecorderPanel(ttk.Frame):
             # Replace existing steps
             self._recorder.set_steps(parse_result.steps)
 
+        # Scope playback to the window from the file's Control Window call,
+        # so desktop-wide searches don't accidentally hit UIATools itself.
+        if parse_result.window_locator:
+            self._executor.set_target_window_locator(parse_result.window_locator)
+
         self._refresh_step_list()
 
         # Show summary
         msg = f"Loaded {len(parse_result.steps)} steps from:\n{path}"
         if parse_result.task_name:
             msg += f"\n\nTask: {parse_result.task_name}"
+        if parse_result.window_locator:
+            msg += f"\n\nWindow: {parse_result.window_locator}"
         if parse_result.variables:
             msg += f"\n\nVariables resolved: {len(parse_result.variables)}"
         if parse_result.warnings:
@@ -936,13 +936,22 @@ class RecorderPanel(ttk.Frame):
         self._set_playback_running(True)
 
         def _run_single():
-            import ctypes
+            import uiautomation as _auto
+            com_inited = False
             try:
-                ctypes.windll.ole32.CoInitialize(0)
+                _auto.InitializeUIAutomationInCurrentThread()
+                com_inited = True
             except Exception:
                 pass
 
-            result = self._executor.execute_single_step(steps[idx])
+            try:
+                result = self._executor.execute_single_step(steps[idx])
+            finally:
+                if com_inited:
+                    try:
+                        _auto.UninitializeUIAutomationInCurrentThread()
+                    except Exception:
+                        pass
             self.after(0, lambda: self._on_single_step_complete(idx, result))
 
         import threading
@@ -989,7 +998,6 @@ class RecorderPanel(ttk.Frame):
             self._step_btn.config(state=tk.DISABLED)
             self._pause_btn.config(state=tk.NORMAL)
             self._stop_btn.config(state=tk.NORMAL)
-            self._record_btn.config(state=tk.DISABLED)
         else:
             self._play_btn.config(state=tk.NORMAL)
             self._step_btn.config(state=tk.NORMAL)
@@ -997,7 +1005,6 @@ class RecorderPanel(ttk.Frame):
             self._pause_btn.config(text="⏸ Pause")
             self._pause_btn.config(command=self._pause_execution)
             self._stop_btn.config(state=tk.DISABLED)
-            self._record_btn.config(state=tk.NORMAL)
 
     def _clear_step_status(self):
         """Clear status from all steps in the tree."""

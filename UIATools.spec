@@ -47,7 +47,17 @@ hiddenimports = [
     'PIL',
     'PIL.Image',
     'PIL.ImageGrab',
-    
+
+    # Screen repository + AI script generation
+    'sqlite3',
+    'litellm',
+    'tiktoken',
+    'tiktoken_ext',
+    'tiktoken_ext.openai_public',
+    'keyring',
+    'keyring.backends',
+    'keyring.backends.Windows',
+
     # Standard library that may be needed
     'ctypes',
     'ctypes.wintypes',
@@ -66,11 +76,18 @@ hiddenimports = [
 hiddenimports += collect_submodules('comtypes')
 hiddenimports += collect_submodules('pywinauto')
 
+# litellm ships JSON data files (model costs, tokenizers) it loads at runtime
+datas = []
+try:
+    datas += collect_data_files('litellm')
+except Exception:
+    pass
+
 a = Analysis(
     ['src/main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

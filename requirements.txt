@@ -4,5 +4,9 @@ comtypes>=1.4.1
 pywin32>=306
 Pillow>=10.0.0
 
+# AI script generation
+litellm>=1.40.0
+keyring>=24.0.0
+
 # Build
 pyinstaller>=6.0.0

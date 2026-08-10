@@ -150,13 +150,30 @@ def parse_robot_content(content: str) -> ParseResult:
                 task_name = line.strip()
                 continue
             
+            # Control Window call - capture the window locator (used to scope playback)
+            stripped = line.strip()
+            if stripped.lower().startswith("control window"):
+                rest = stripped[len("control window"):].strip()
+                if rest and not window_locator:
+                    window_locator = _resolve_variable(
+                        re.split(r"\s{2,}", rest)[0].strip(), variables
+                    )
+                continue
+            
+            # Set Anchor - scoping hint for RPA.Windows, not an executable step
+            if stripped.lower().startswith("set anchor"):
+                continue
+            
+            # Sleep -> record as delay after the previous step
+            if stripped.lower().startswith("sleep") and steps:
+                delay = _parse_sleep_duration(stripped)
+                if delay > 0:
+                    steps[-1].wait_after_action = delay
+                continue
+            
             # Keyword call (indented)
             step = _parse_keyword_line(line, variables, step_number + 1, line_num)
             if step:
-                if step.action == ActionType.CLICK and step.locator.lower().startswith("control window"):
-                    # This is a Control Window call, extract window locator
-                    window_locator = step.locator
-                    continue
                 step_number += 1
                 steps.append(step)
         
@@ -165,6 +182,27 @@ def parse_robot_content(content: str) -> ParseResult:
             if not line.startswith((" ", "\t")):
                 continue
             if re.match(r"\s*\[", line):  # [Documentation], [Arguments], etc.
+                continue
+            
+            stripped = line.strip()
+            # Control Window inside keyword body - capture first for scoping
+            if stripped.lower().startswith("control window"):
+                rest = stripped[len("control window"):].strip()
+                if rest and not window_locator:
+                    window_locator = _resolve_variable(
+                        re.split(r"\s{2,}", rest)[0].strip(), variables
+                    )
+                continue
+            
+            # Set Anchor - scoping hint, not an executable step
+            if stripped.lower().startswith("set anchor"):
+                continue
+            
+            # Sleep -> record as delay after the previous step
+            if stripped.lower().startswith("sleep") and steps:
+                delay = _parse_sleep_duration(stripped)
+                if delay > 0:
+                    steps[-1].wait_after_action = delay
                 continue
             
             step = _parse_keyword_line(line, variables, step_number + 1, line_num)
@@ -208,8 +246,12 @@ def _parse_keyword_line(
     
     lower_line = line.lower()
     
-    # Skip non-action keywords
-    skip_prefixes = ("sleep", "log", "should", "wait until", "run keyword", "set ", "return", "[")
+    # Skip non-action keywords. Note: must not swallow "Set Value" -
+    # only skip specific RF built-in "Set ..." keywords.
+    skip_prefixes = (
+        "sleep", "log", "should", "wait until", "run keyword", "return", "[",
+        "set global", "set suite", "set test", "set task", "set local", "set variable",
+    )
     if any(lower_line.startswith(p) for p in skip_prefixes):
         return None
     
@@ -261,16 +303,31 @@ def _parse_keyword_line(
     # Extract text input for keywords that need it
     if action_type in TEXT_KEYWORDS:
         if action_type == ActionType.SEND_KEYS:
-            # Send Keys uses keys= argument or first positional arg
+            # Forms:
+            #   Send Keys    keys={TAB}                (focused element)
+            #   Send Keys    ${LOCATOR}    ${VALUE}    (typed into element)
+            keys_arg = ""
+            positional = []
             for part in parts:
                 part = part.strip()
                 if part.lower().startswith("keys="):
-                    text_input = part[5:]
-                    break
-            if not text_input and parts:
-                # First positional arg might be the keys
-                text_input = parts[0].strip()
-            locator = "(focused element)"  # Send Keys doesn't need locator
+                    keys_arg = part[5:]
+                else:
+                    positional.append(part)
+            if keys_arg:
+                text_input = _resolve_variable(keys_arg, variables)
+                locator = (
+                    _resolve_variable(positional[0], variables)
+                    if positional else "(focused element)"
+                )
+            elif len(positional) >= 2:
+                locator = _resolve_variable(positional[0], variables)
+                text_input = _resolve_variable(positional[1], variables)
+            elif positional:
+                text_input = _resolve_variable(positional[0], variables)
+                locator = "(focused element)"
+            else:
+                locator = "(focused element)"
         elif len(parts) > 1:
             text_input = parts[1].strip()
             text_input = _resolve_variable(text_input, variables)
@@ -285,6 +342,23 @@ def _parse_keyword_line(
         text_input=text_input,
         locator_override=locator,  # Use the locator as override since we don't have full element info
     )
+
+
+def _parse_sleep_duration(line: str) -> float:
+    """Parse a 'Sleep    4.7s' line and return the duration in seconds."""
+    match = re.search(r"sleep\s+([\d.]+)\s*(s|sec|secs|seconds?|ms|milliseconds?|m|min|mins|minutes?)?", line, re.IGNORECASE)
+    if not match:
+        return 0.0
+    try:
+        value = float(match.group(1))
+    except ValueError:
+        return 0.0
+    unit = (match.group(2) or "s").lower()
+    if unit.startswith("ms") or unit.startswith("millisecond"):
+        return value / 1000.0
+    if unit in ("m", "min", "mins") or unit.startswith("minute"):
+        return value * 60.0
+    return value
 
 
 def _resolve_variable(value: str, variables: dict[str, str]) -> str:

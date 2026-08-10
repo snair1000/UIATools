@@ -26,11 +26,23 @@ from src.core.recorder import Recorder, ActionType, RecordedStep
 from src.gui.tree_panel import TreePanel
 from src.gui.property_panel import PropertyPanel
 from src.gui.recorder_panel import RecorderPanel
+from src.gui.repository_panel import RepositoryPanel
+from src.gui.coord_recorder_panel import CoordRecorderPanel
 from src.gui.highlight import HighlightOverlay
 from src.export.rf_exporter import export_element_locators, export_element_to_rf_keyword, export_elements_to_csv
 from src.export.locator_strategy import build_locator_strategies
+from src.repository.screen_db import ScreenRepository
+from src.utils import app_config
 from src.utils.mouse_hook import MouseHook
-from src.utils.win_helpers import enumerate_top_level_windows, get_cursor_pos
+from src.utils.win_helpers import (
+    enumerate_top_level_windows,
+    get_cursor_pos,
+    get_window_rect,
+    get_window_text,
+    get_window_class_name,
+    get_process_id_from_hwnd,
+    get_process_name,
+)
 
 
 class InspectorApp:
@@ -51,6 +63,8 @@ class InspectorApp:
         self._target_window: Optional[auto.Control] = None
         self._recorder = Recorder()
         self._compact_mode = False
+        self._config = app_config.load_config()
+        self._repository: Optional[ScreenRepository] = None
 
         self._setup_styles()
         self._setup_menu()
@@ -69,6 +83,9 @@ class InspectorApp:
         self._root.bind("<F9>", lambda e: self._run_single_step())
 
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Reopen the last repository if configured
+        self._reopen_last_repository()
 
     def run(self):
         """Start the tkinter main loop."""
@@ -91,6 +108,9 @@ class InspectorApp:
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Select Window...", command=self._show_window_picker)
         file_menu.add_command(label="Refresh Tree (F5)", command=self._refresh_tree)
+        file_menu.add_separator()
+        file_menu.add_command(label="New Repository...", command=lambda: self._repo_panel._new_repository())
+        file_menu.add_command(label="Open Repository...", command=lambda: self._repo_panel._open_repository())
         file_menu.add_separator()
         file_menu.add_command(label="Export All to File...", command=self._export_all_to_file)
         file_menu.add_separator()
@@ -159,6 +179,15 @@ class InspectorApp:
             label="Toggle Compact Mode (Ctrl+M)", command=self._toggle_compact_mode
         )
         menubar.add_cascade(label="View", menu=view_menu)
+
+        # AI menu
+        ai_menu = tk.Menu(menubar, tearoff=0)
+        ai_menu.add_command(label="AI Settings...", command=self._show_ai_settings)
+        ai_menu.add_command(
+            label="Generate Script from Coord Recording...",
+            command=self._generate_from_coord_events,
+        )
+        menubar.add_cascade(label="AI", menu=ai_menu)
 
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -287,6 +316,27 @@ class InspectorApp:
             on_highlight_step=self._on_highlight_recorded_step,
         )
         self._recorder_panel.pack(fill=tk.BOTH, expand=True)
+
+        # ─── Repository Tab ───
+        repository_tab = ttk.Frame(right_notebook)
+        right_notebook.add(repository_tab, text="🗄 Repository")
+
+        self._repo_panel = RepositoryPanel(
+            repository_tab,
+            on_capture=self._capture_screen_snapshot,
+            on_repository_changed=self._on_repository_changed,
+        )
+        self._repo_panel.pack(fill=tk.BOTH, expand=True)
+
+        # ─── Coord Recorder Tab ───
+        coord_tab = ttk.Frame(right_notebook)
+        right_notebook.add(coord_tab, text="🎬 Coord Recorder")
+
+        self._coord_panel = CoordRecorderPanel(
+            coord_tab,
+            on_generate=self._on_generate_requested,
+        )
+        self._coord_panel.pack(fill=tk.BOTH, expand=True)
 
         self._right_notebook = right_notebook
 
@@ -950,5 +1000,276 @@ class InspectorApp:
     def _on_close(self):
         """Handle window close."""
         self._stop_all_modes()
+        try:
+            self._coord_panel.shutdown()
+        except Exception:
+            pass
+        if self._repository:
+            try:
+                self._repository.close()
+            except Exception:
+                pass
+        try:
+            app_config.save_config(self._config)
+        except Exception:
+            pass
         self._highlight.destroy()
         self._root.destroy()
+
+    # ── Screen repository ──────────────────────────────────
+
+    def _reopen_last_repository(self):
+        """Reopen the repository used in the previous session, if any."""
+        import os
+        path = self._config.get("last_repository", "")
+        if path and os.path.isfile(path):
+            try:
+                repo = ScreenRepository(path)
+            except Exception:
+                return
+            self._repository = repo
+            self._repo_panel.set_repository(repo)
+            self._coord_panel.set_repository(repo)
+
+    def _on_repository_changed(self, repo: Optional[ScreenRepository]):
+        """Called by RepositoryPanel when the user opens/creates a repo."""
+        self._repository = repo
+        self._coord_panel.set_repository(repo)
+        if repo:
+            self._config["last_repository"] = repo.db_path
+            try:
+                app_config.save_config(self._config)
+            except Exception:
+                pass
+            self._set_status(f"Repository: {repo.db_path}")
+
+    def _capture_screen_snapshot(self):
+        """Let the user pick a window, then capture its full tree into the repository."""
+        if self._repository is None:
+            messagebox.showinfo("Repository", "Create or open a repository first.")
+            return
+
+        picker = tk.Toplevel(self._root)
+        picker.title("Capture Window into Repository")
+        picker.geometry("650x460")
+        picker.transient(self._root)
+        picker.grab_set()
+
+        ttk.Label(
+            picker, text="Select the window to capture:", font=("Segoe UI", 10)
+        ).pack(padx=8, pady=4, anchor=tk.W)
+
+        frame = ttk.Frame(picker)
+        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        lb = tk.Listbox(frame, font=("Consolas", 9))
+        sb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=lb.yview)
+        lb.config(yscrollcommand=sb.set)
+        lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        windows = enumerate_top_level_windows()
+
+        def _fill_list():
+            lb.delete(0, tk.END)
+            for w in windows:
+                title = w["title"][:80]
+                lb.insert(tk.END, f"[{w['hwnd']:08X}] {title} ({w['class_name']})")
+            # Pre-select the current target window, if any
+            try:
+                cur_hwnd = self._target_window.NativeWindowHandle if self._target_window else None
+            except Exception:
+                cur_hwnd = None
+            if cur_hwnd:
+                for i, w in enumerate(windows):
+                    if w["hwnd"] == cur_hwnd:
+                        lb.selection_set(i)
+                        lb.see(i)
+                        break
+
+        _fill_list()
+
+        # Depth control (Repository capture defaults to 100 for nested elements)
+        depth_frame = ttk.Frame(picker)
+        depth_frame.pack(fill=tk.X, padx=8, pady=4)
+        ttk.Label(depth_frame, text="Max Depth:").pack(side=tk.LEFT)
+        depth_var = tk.IntVar(value=100)
+        ttk.Spinbox(
+            depth_frame, from_=1, to=500, textvariable=depth_var, width=6
+        ).pack(side=tk.LEFT, padx=4)
+
+        def _refresh():
+            windows.clear()
+            windows.extend(enumerate_top_level_windows())
+            _fill_list()
+
+        def _on_capture():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showinfo("Capture Screen", "Select a window first.", parent=picker)
+                return
+            w = windows[sel[0]]
+            try:
+                max_depth = max(1, int(depth_var.get()))
+            except Exception:
+                max_depth = 100
+            picker.destroy()
+            self._capture_window_into_repo(w["hwnd"], max_depth)
+
+        btn_frame = ttk.Frame(picker)
+        btn_frame.pack(fill=tk.X, padx=8, pady=8)
+        ttk.Button(btn_frame, text="Capture", command=_on_capture).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Refresh", command=_refresh).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Cancel", command=picker.destroy).pack(side=tk.RIGHT, padx=4)
+
+        lb.bind("<Double-1>", lambda e: _on_capture())
+
+    def _capture_window_into_repo(self, hwnd: int, max_depth: int):
+        """Capture the tree of the window identified by hwnd into the repository."""
+        try:
+            window_title = get_window_text(hwnd)
+        except Exception:
+            messagebox.showerror("Capture Screen", "Selected window is no longer available.")
+            return
+
+        label = self._repo_panel.ask_screen_label(default=window_title)
+        if not label:
+            return
+
+        repo = self._repository
+
+        self._set_status(f"Capturing '{label}' (depth {max_depth})...")
+
+        def _do_capture():
+            import sys
+            try:
+                import ctypes as _ctypes
+                _ctypes.windll.ole32.CoInitialize(0)
+            except Exception:
+                pass
+
+            try:
+                target = find_window_by_handle(hwnd)
+                if target is None:
+                    # Fallback: search Desktop children by handle
+                    root = get_root_element()
+                    for child in get_children(root):
+                        try:
+                            if child.NativeWindowHandle == hwnd:
+                                target = child
+                                break
+                        except Exception:
+                            continue
+
+                if target is None:
+                    self._root.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Capture Screen", f"Window not found (handle={hwnd:#010x})."
+                        ),
+                    )
+                    return
+
+                window_rect = get_window_rect(hwnd)
+                class_name = get_window_class_name(hwnd)
+                pid = get_process_id_from_hwnd(hwnd)
+                process_name = get_process_name(pid)
+
+                tree = walk_from_window(
+                    target,
+                    max_depth=max_depth,
+                    progress_callback=lambda s: self._root.after(0, self._set_status, s),
+                )
+
+                screenshot = None
+                try:
+                    from PIL import ImageGrab
+                    import io
+                    img = ImageGrab.grab(bbox=window_rect)
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    screenshot = buf.getvalue()
+                except Exception:
+                    pass
+
+                screen_id = repo.save_screen(
+                    tree,
+                    label=label,
+                    window_title=window_title,
+                    process_name=process_name,
+                    class_name=class_name,
+                    window_rect=window_rect,
+                    max_depth=max_depth,
+                    screenshot=screenshot,
+                )
+
+                def _done():
+                    self._repo_panel.refresh_screens()
+                    self._set_status(f"Captured screen '{label}' (id {screen_id}).")
+
+                self._root.after(0, _done)
+            except Exception as e:
+                err = f"Screen capture failed: {e}"
+                print(f"[UIATools] {err}", file=sys.stderr)
+                import traceback; traceback.print_exc(file=sys.stderr)
+                self._root.after(0, lambda: messagebox.showerror("Capture Screen", err))
+
+        threading.Thread(target=_do_capture, daemon=True).start()
+
+    # ── AI script generation ─────────────────────────────────
+
+    def _show_ai_settings(self):
+        """Open the AI provider settings dialog."""
+        from src.gui.ai_settings_dialog import AISettingsDialog
+
+        def _on_saved(config):
+            self._config = config
+            self._set_status(f"AI model: {config['llm']['model']}")
+
+        AISettingsDialog(self._root, self._config, on_saved=_on_saved)
+
+    def _build_llm_client(self):
+        """Create an LLMClient from the current config."""
+        from src.ai.llm_client import LLMClient
+
+        llm_cfg = self._config.get("llm", {})
+        model = llm_cfg.get("model", "ollama/qwen2.5-coder:14b")
+        provider = "custom"
+        if model.startswith("anthropic/"):
+            provider = "anthropic"
+        elif model.startswith("openai/"):
+            provider = "openai"
+        api_key = app_config.get_api_key(provider) if provider != "custom" else None
+        return LLMClient(
+            model=model,
+            api_key=api_key,
+            api_base=llm_cfg.get("api_base"),
+            temperature=float(llm_cfg.get("temperature", 0.2)),
+            max_tokens=int(llm_cfg.get("max_tokens", 4096)),
+        )
+
+    def _generate_from_coord_events(self):
+        """Generate a script from the Coord Recorder tab's current events."""
+        events = self._coord_panel.events
+        if not events:
+            messagebox.showinfo(
+                "AI Generation",
+                "No captured events. Use the Coord Recorder tab first.",
+            )
+            return
+        self._on_generate_requested(events)
+
+    def _on_generate_requested(self, events):
+        """Called by CoordRecorderPanel's Generate button."""
+        if self._repository is None:
+            messagebox.showinfo(
+                "AI Generation", "Open a screen repository first (Repository tab)."
+            )
+            return
+
+        from src.ai.script_builder import ScriptBuilder
+        from src.gui.generation_review_dialog import GenerationReviewDialog
+
+        llm = self._build_llm_client()
+        builder = ScriptBuilder(self._repository, llm)
+        GenerationReviewDialog(self._root, builder, events)
