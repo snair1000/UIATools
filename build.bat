@@ -39,10 +39,12 @@ if errorlevel 1 (
 
 echo ============================================
 echo BUILD SUCCESSFUL!
-echo Executable location: dist\UIATools.exe
+echo Application folder: dist\UIATools\
+echo Executable: dist\UIATools\UIATools.exe
+echo Distribute the whole dist\UIATools folder (zip it for users).
 echo ============================================
 
-REM Show file size
-for %%A in (dist\UIATools.exe) do echo File size: %%~zA bytes
+REM Show launcher exe size
+for %%A in (dist\UIATools\UIATools.exe) do echo Launcher size: %%~zA bytes
 
 pause

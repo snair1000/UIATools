@@ -18,7 +18,12 @@ from typing import Optional
 
 import uiautomation as auto
 
-from src.core.uia_wrapper import get_root_element, get_children, find_window_by_handle
+from src.core.uia_wrapper import (
+    get_root_element,
+    get_children,
+    find_window_by_handle,
+    find_selected_tab_name,
+)
 from src.core.tree_walker import TreeNode, walk_tree, walk_from_window, find_node_at_point
 from src.core.coord_mapper import map_point_to_element, resolve_path_to_element, CoordMapResult
 from src.core.element_inspector import inspect_element
@@ -1132,7 +1137,15 @@ class InspectorApp:
             messagebox.showerror("Capture Screen", "Selected window is no longer available.")
             return
 
-        label = self._repo_panel.ask_screen_label(default=window_title)
+        # Same window can look different per selected tab: suggest a label
+        # that includes the active tab so each tab state is captured as its
+        # own screen variant (resolution searches all variants of a window).
+        default_label = window_title
+        tab_name = find_selected_tab_name(hwnd)
+        if tab_name:
+            default_label = f"{window_title} - {tab_name}"
+
+        label = self._repo_panel.ask_screen_label(default=default_label)
         if not label:
             return
 

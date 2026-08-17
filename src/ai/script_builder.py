@@ -224,7 +224,9 @@ class ScriptBuilder:
         if typed_text:
             step.text = "${SECRET}" if text_redacted else typed_text
 
-        # 1. Match screen
+        # 1. Match screen. The same window title can have several stored
+        # variants (one per tab state) - search ALL of them and keep the
+        # variant whose stored element best fits this click point.
         matches = self._repo.match_screen(click.window_title, click.process_name)
         if not matches:
             step.needs_review = True
@@ -233,24 +235,26 @@ class ScriptBuilder:
                 f"({click.process_name}). Capture it in the Repository tab."
             )
             return step
-        screen, score = matches[0]
+
+        screen, rel_x, rel_y, candidates_recs = self._pick_screen_variant(
+            click, matches
+        )
         step.screen = screen
         step.window_locator = self._window_locator_for(click, screen)
 
-        # 2. Window-relative coordinates with resize scaling
-        rel_x, rel_y = self._to_screen_coords(click, screen)
-
-        # 3. Candidate lookup, ranked deterministically around the click
-        # point so Candidate 1 is the element the user actually clicked.
-        candidates_recs = self._repo.find_elements_at(screen.screen_id, rel_x, rel_y)
         if not candidates_recs:
+            variant_labels = ", ".join(
+                f"'{s.label}'" for s, _ in matches[:5]
+            )
+            rel_x, rel_y = self._to_screen_coords(click, screen)
             step.needs_review = True
             step.error = (
                 f"No stored element found at window-relative ({rel_x}, {rel_y}) "
-                f"on screen '{screen.label}'."
+                f"in any stored variant of this window ({variant_labels}). "
+                "If the window has tabs, capture each tab state as its own "
+                "screen in the Repository tab."
             )
             return step
-        candidates_recs = self._rank_candidates(candidates_recs, rel_x, rel_y)
 
         # Guard: if the deepest thing stored at this point is the WebView2
         # host pane itself, the screen snapshot was captured before the
@@ -367,6 +371,21 @@ class ScriptBuilder:
     })
 
     @classmethod
+    def _candidate_key(cls, rec: ElementRecord, rel_x: int, rel_y: int):
+        """Sort key: interactive controls first, then smallest rect, then
+        center closest to the click point, then deepest in the tree."""
+        left, top, right, bottom = rec.rect
+        area = max((right - left) * (bottom - top), 1)
+        cx = (left + right) / 2.0
+        cy = (top + bottom) / 2.0
+        dist = ((rel_x - cx) ** 2 + (rel_y - cy) ** 2) ** 0.5
+        interactive = (
+            0 if rec.element_info.control_type_name in cls._INTERACTIVE_TYPES
+            else 1
+        )
+        return (interactive, area, dist, -rec.depth)
+
+    @classmethod
     def _rank_candidates(
         cls, recs: list[ElementRecord], rel_x: int, rel_y: int
     ) -> list[ElementRecord]:
@@ -375,19 +394,48 @@ class ScriptBuilder:
         clicked: interactive controls first, then smallest rect, then the
         center closest to the click point, then deepest in the tree.
         """
-        def _key(rec: ElementRecord):
-            left, top, right, bottom = rec.rect
-            area = max((right - left) * (bottom - top), 1)
-            cx = (left + right) / 2.0
-            cy = (top + bottom) / 2.0
-            dist = ((rel_x - cx) ** 2 + (rel_y - cy) ** 2) ** 0.5
-            interactive = (
-                0 if rec.element_info.control_type_name in cls._INTERACTIVE_TYPES
-                else 1
-            )
-            return (interactive, area, dist, -rec.depth)
+        return sorted(recs, key=lambda r: cls._candidate_key(r, rel_x, rel_y))
 
-        return sorted(recs, key=_key)
+    def _pick_screen_variant(
+        self,
+        click: RecordedEvent,
+        matches: list[tuple[ScreenRecord, float]],
+    ) -> tuple[ScreenRecord, int, int, list[ElementRecord]]:
+        """
+        Among all stored screens matching the clicked window (e.g. one
+        capture per tab state of the same window), pick the variant whose
+        stored element at the click point looks most like the real target.
+
+        Considers every match tied with the best title/process score,
+        ranks each variant's candidates, and compares the winners across
+        variants with _candidate_key. Newer captures win ties. Returns
+        (screen, rel_x, rel_y, ranked_candidates); candidates is [] when
+        no variant has an element at the click point.
+        """
+        best_score = matches[0][1]
+        variants = [s for s, sc in matches if sc >= best_score - 0.05]
+
+        best: Optional[tuple] = None  # (key, -screen_id, screen, rel_x, rel_y, ranked)
+        for screen in variants:
+            rel_x, rel_y = self._to_screen_coords(click, screen)
+            recs = self._repo.find_elements_at(screen.screen_id, rel_x, rel_y)
+            if not recs:
+                continue
+            ranked = self._rank_candidates(recs, rel_x, rel_y)
+            top = ranked[0]
+            # Penalise variants where only a webview host pane covers the
+            # point - another variant with real content should win.
+            key = self._candidate_key(top, rel_x, rel_y)
+            if self._is_webview_host(top.element_info):
+                key = (key[0] + 2,) + key[1:]
+            entry = (key, -screen.screen_id, screen, rel_x, rel_y, ranked)
+            if best is None or entry[:2] < best[:2]:
+                best = entry
+
+        if best is None:
+            return matches[0][0], 0, 0, []
+        _, _, screen, rel_x, rel_y, ranked = best
+        return screen, rel_x, rel_y, ranked
 
     @staticmethod
     def _window_locator_for(click: RecordedEvent, screen: ScreenRecord) -> str:

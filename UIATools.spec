@@ -109,20 +109,19 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# One-dir build: the launcher exe stays small (~2-4 MB, well under the 32 MB
+# CrowdStrike certificate-extraction limit) and all libraries live next to it
+# in dist/UIATools/_internal/. UPX disabled - packed exes trigger AV heuristics.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='UIATools',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
+    upx=False,
     console=False,  # No console window - this is a GUI app
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -131,4 +130,14 @@ exe = EXE(
     entitlements_file=None,
     uac_admin=False,  # Set to True if you always need admin rights
     icon=None,  # Add icon path here if you have one: icon='assets/icon.ico'
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    name='UIATools',
 )

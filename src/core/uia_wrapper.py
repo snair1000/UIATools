@@ -189,3 +189,36 @@ def get_children(ctrl: auto.Control) -> list[auto.Control]:
         return ctrl.GetChildren()
     except Exception:
         return []
+
+
+def find_selected_tab_name(hwnd: int, max_depth: int = 12, max_nodes: int = 600) -> str:
+    """
+    Return the Name of the currently selected tab item in a window,
+    or '' if none is found.
+
+    Bounded breadth-first scan (max_depth / max_nodes) so huge trees don't
+    stall the caller. Used to suggest distinguishing screen labels when the
+    same window is captured once per tab state.
+    """
+    try:
+        win = find_window_by_handle(hwnd)
+        if win is None:
+            return ""
+        queue: list[tuple[auto.Control, int]] = [(win, 0)]
+        seen = 0
+        while queue and seen < max_nodes:
+            ctrl, depth = queue.pop(0)
+            seen += 1
+            try:
+                if ctrl.ControlTypeName == "TabItemControl":
+                    pattern = ctrl.GetSelectionItemPattern()
+                    if pattern is not None and pattern.IsSelected:
+                        return ctrl.Name or ""
+                    continue  # no need to descend into tab items
+            except Exception:
+                pass
+            if depth < max_depth:
+                queue.extend((c, depth + 1) for c in get_children(ctrl))
+    except Exception:
+        pass
+    return ""
